@@ -350,6 +350,8 @@ fieldDecoratorKit.setDecorator({
 
       const requestBody = {
         model: GEMINI_MODEL,
+        amount: 10,
+        cost: 10,
         messages: [
           { role: 'system', content: '系统提示词由 aivip 后端提示词配置注入。' },
           { role: 'user', content: userContent },
