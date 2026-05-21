@@ -12,6 +12,8 @@ node_modules
 # production
 /build
 /pkg
+output/
+config.json
 
 # misc
 .DS_Store
@@ -26,4 +28,5 @@ yarn-error.log*
 
 
 package.lock.json
+package-lock.json
 pnpm-lock.yaml
