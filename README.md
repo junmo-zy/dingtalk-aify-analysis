@@ -1,13 +1,23 @@
-## 钉钉AI表格字段模板开发demo仓库
-### 使用
-- 启动
+# AIFY分析
+
+钉钉 AI 表格字段模板（FaaS 版）。根据提示词分析附件图片，调用 AIFY 后端生成结构化文本结果。
+
+## 功能
+
+- 选择提示词文本字段
+- 选择图片附件字段，单格最多分析 10 张图片
+- 使用 AIFY API 授权
+- 返回文本结果
+
+## 本地开发
+
 ```bash
+npm install
 npm run start
 ```
-- 构建
+
+## 打包
+
 ```bash
 npm run build
 ```
-
-### AI快速实现字段模板
-目前做了claude code的context工程，可以在项目下直接使用claude code的/create来新建字段模板
