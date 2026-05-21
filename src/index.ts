@@ -1,3 +1,4 @@
+// @ts-ignore: Use the field-only entry to avoid bundling CLI dependencies from the package root.
 import {
   AuthorizationType,
   FieldExecuteCode,
