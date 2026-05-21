@@ -1,11 +1,10 @@
-// @ts-ignore: Use the field-only entry to avoid bundling CLI dependencies from the package root.
-import {
+const {
   AuthorizationType,
   FieldExecuteCode,
   FieldType,
   FormItemComponent,
   fieldDecoratorKit,
-} from 'dingtalk-docs-cool-app/dist-node/module/fields/index.js';
+}: typeof import('dingtalk-docs-cool-app') = require('dingtalk-docs-cool-app/dist-node/module/fields/index.js');
 import { existsSync, readFileSync } from 'fs';
 
 const { t } = fieldDecoratorKit;
