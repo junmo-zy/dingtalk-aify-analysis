@@ -11,7 +11,6 @@ const { t } = fieldDecoratorKit;
 
 const GEMINI_MODEL = 'gemini-3-pro-preview';
 const GEMINI_API_BASE = 'https://aivip.link';
-const CHARGE_API = 'https://aivip.link/api/interface/plugin/invoke';
 const AUTH_ID = 'aify_auth';
 
 type DingTalkContext = {
@@ -31,14 +30,6 @@ type Attachment = {
   tmp_url?: string;
   url?: string;
   [key: string]: any;
-};
-
-type ChargeResult = {
-  ok: boolean;
-  msg: string;
-  quotaExhausted?: boolean;
-  cost?: number;
-  remaining?: number;
 };
 
 function isLocalUrl(url: string): boolean {
@@ -100,65 +91,6 @@ domainList.push(
   /(^|\.)aliyuncs\.com$/i,
   /(^|\.)alicdn\.com$/i,
 );
-
-async function charge(context: DingTalkContext): Promise<ChargeResult> {
-  try {
-    const res = await fetchWithLocalhostSupport(
-      context,
-      CHARGE_API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'plugin_charge',
-          pack_id: context.extensionId,
-          base_id: context.baseId,
-          amount: 10,
-        }),
-      },
-      AUTH_ID,
-    );
-
-    const resText = await res.text();
-
-    if (res.ok) {
-      const body = JSON.parse(resText);
-      console.log(JSON.stringify({
-        tag: '===charge 计费返回',
-        status: res.status,
-        code: body?.code,
-        cost: body?.data?.cost,
-        remaining: body?.data?.remaining ?? body?.data?.balance,
-        requestId: body?.data?.request_id,
-      }), '\n');
-      if (body.code === 0) {
-        return {
-          ok: true,
-          msg: '',
-          cost: Number(body?.data?.cost || 0),
-          remaining: Number(body?.data?.remaining ?? body?.data?.balance ?? 0),
-        };
-      }
-      if (body.code === 402) {
-        return { ok: false, msg: '积分不足，请前往平台充值后再使用', quotaExhausted: true };
-      }
-    }
-
-    let msg = '计费服务暂时不可用，请稍后重试';
-    if (res.status === 402) {
-      msg = '积分不足，请前往平台充值后再使用';
-      return { ok: false, msg, quotaExhausted: true };
-    }
-    if (res.status === 401) msg = 'API Key 无效，请检查授权配置';
-
-    console.error(`[charge] failed status=${res.status} msg=${msg}`);
-    return { ok: false, msg };
-  } catch (e: any) {
-    const msg = '计费服务暂时不可用，请稍后重试';
-    console.error(`[charge] exception: ${e?.message}`);
-    return { ok: false, msg };
-  }
-}
 
 function extractPrompt(promptField: unknown): string {
   if (Array.isArray(promptField)) {
@@ -326,16 +258,6 @@ fieldDecoratorKit.setDecorator({
         debugLog({ '===5 错误': '所有图片加载均失败' });
         return { code: FieldExecuteCode.Error };
       }
-
-      const chargeResult = await charge(context);
-      if (!chargeResult.ok) {
-        debugLog({ '===5.5 扣费失败': chargeResult.msg });
-        if (chargeResult.quotaExhausted) {
-          return { code: FieldExecuteCode.QuotaExhausted };
-        }
-        return { code: FieldExecuteCode.Error };
-      }
-      debugLog({ '===5.5 扣费成功': { cost: 10, remaining: chargeResult.remaining } });
 
       const userContent: any[] = [
         ...imageParts.map((p: any) => ({
