@@ -11,7 +11,14 @@ const { t } = fieldDecoratorKit;
 
 const GEMINI_MODEL = 'gemini-3-pro-preview';
 const GEMINI_API_BASE = 'https://aivip.link';
+const CHARGE_API = `${GEMINI_API_BASE}/api/interface/plugin/invoke`;
 const AUTH_ID = 'aify_auth';
+
+function getAnalysisCost(imageCount: number): number {
+  if (imageCount <= 3) return 40;
+  if (imageCount <= 6) return 60;
+  return 80;
+}
 
 type DingTalkContext = {
   fetch: (url: string, options: any, authId?: string) => Promise<any>;
@@ -30,6 +37,14 @@ type Attachment = {
   tmp_url?: string;
   url?: string;
   [key: string]: any;
+};
+
+type ChargeResult = {
+  ok: boolean;
+  msg: string;
+  quotaExhausted?: boolean;
+  cost?: number;
+  remaining?: number;
 };
 
 function isLocalUrl(url: string): boolean {
@@ -67,6 +82,62 @@ async function fetchWithLocalhostSupport(context: DingTalkContext, url: string, 
     ...options,
     headers,
   });
+}
+
+async function charge(context: DingTalkContext, amount: number, imageCount: number): Promise<ChargeResult> {
+  try {
+    const res = await fetchWithLocalhostSupport(
+      context,
+      CHARGE_API,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'plugin_charge',
+          pack_id: context.packID,
+          base_id: context.baseID,
+          amount,
+          image_count: imageCount,
+        }),
+      },
+      AUTH_ID,
+    );
+    const resText = await res.text();
+    let body: any = {};
+    try {
+      body = JSON.parse(resText);
+    } catch {
+      body = {};
+    }
+    console.log(JSON.stringify({
+      tag: '===charge 计费返回',
+      status: res.status,
+      code: body?.code,
+      cost: body?.data?.cost,
+      remaining: body?.data?.remaining,
+      requestId: body?.data?.request_id,
+    }), '\n');
+
+    if (res.ok && body?.code === 0) {
+      return {
+        ok: true,
+        msg: '',
+        cost: Number(body?.data?.cost ?? amount),
+        remaining: Number(body?.data?.remaining ?? body?.data?.balance ?? 0),
+      };
+    }
+
+    if (res.status === 402 || body?.code === 402) {
+      return { ok: false, msg: '积分不足，请前往平台充值后再使用', quotaExhausted: true };
+    }
+    if (res.status === 401 || body?.code === 401) {
+      return { ok: false, msg: 'API Key 无效，请检查授权配置' };
+    }
+    return { ok: false, msg: body?.message || '计费服务暂时不可用，请稍后重试' };
+  } catch (e: any) {
+    console.error(`[charge] exception: ${e?.message}`);
+    return { ok: false, msg: '计费服务暂时不可用，请稍后重试' };
+  }
 }
 
 fieldDecoratorKit.setDomainList([
@@ -128,8 +199,8 @@ fieldDecoratorKit.setDecorator({
     'zh-CN': {
       promptLabel: '提示词',
       promptTooltip: '选择包含提示词的文本字段，AIFY 将以此为指令分析图片并生成新内容',
-      imagesLabel: '图片列（最多10张）',
-      imagesTooltip: '选择一个附件字段，单格内最多分析 10 张图片',
+      imagesLabel: '图片列（1-3张40积分，4-6张60积分，7-10张80积分）',
+      imagesTooltip: '选择一个附件字段，单格内最多分析 10 张图片。扣费规则：1-3张40积分，4-6张60积分，7-10张80积分。',
       authorizationName: 'AIFY API 授权',
       authorizationTooltip: '请访问 https://aivip.link/dashboard/apikey 查看或生成您的 API Key。',
     },
@@ -137,8 +208,8 @@ fieldDecoratorKit.setDecorator({
       promptLabel: 'Prompt',
       promptTooltip:
         'Select the text field containing the prompt. AIFY will use it as instructions to analyze images and generate new content.',
-      imagesLabel: 'Image Field (max 10)',
-      imagesTooltip: 'Select one attachment field. Up to 10 images in the cell will be analyzed.',
+      imagesLabel: 'Image Field (1-3: 40 pts, 4-6: 60 pts, 7-10: 80 pts)',
+      imagesTooltip: 'Select one attachment field. Up to 10 images in the cell will be analyzed. Billing: 1-3 images 40 points, 4-6 images 60 points, 7-10 images 80 points.',
       authorizationName: 'AIFY API Authorization',
       authorizationTooltip: 'Visit https://aivip.link/dashboard/apikey to get your API Key.',
     },
@@ -146,8 +217,8 @@ fieldDecoratorKit.setDecorator({
       promptLabel: 'プロンプト',
       promptTooltip:
         'プロンプトを含むテキストフィールドを選択してください。AIFY がそれを指示として画像を分析し、新しいコンテンツを生成します。',
-      imagesLabel: '画像列（最大10枚）',
-      imagesTooltip: '添付フィールドを1つ選択してください。セル内の画像を最大10枚まで分析します。',
+      imagesLabel: '画像列（1-3枚40ポイント、4-6枚60ポイント、7-10枚80ポイント）',
+      imagesTooltip: '添付フィールドを1つ選択してください。セル内の画像を最大10枚まで分析します。課金ルール：1-3枚40ポイント、4-6枚60ポイント、7-10枚80ポイント。',
       authorizationName: 'AIFY API 認証',
       authorizationTooltip: 'https://aivip.link/dashboard/apikey で API Key を取得してください。',
     },
@@ -270,10 +341,28 @@ fieldDecoratorKit.setDecorator({
         },
       ];
 
+      const chargeAmount = getAnalysisCost(imageParts.length);
+      const chargeResult = await charge(context, chargeAmount, imageParts.length);
+      if (!chargeResult.ok) {
+        debugLog({ '===5.5 扣费失败': { amount: chargeAmount, msg: chargeResult.msg } });
+        if (chargeResult.quotaExhausted) {
+          return { code: FieldExecuteCode.QuotaExhausted };
+        }
+        return { code: FieldExecuteCode.Error };
+      }
+      debugLog({
+        '===5.5 扣费成功': {
+          cost: chargeResult.cost ?? chargeAmount,
+          imageCount: imageParts.length,
+          remaining: chargeResult.remaining,
+        },
+      });
+
       const requestBody = {
         model: GEMINI_MODEL,
-        amount: 10,
-        cost: 10,
+        amount: chargeAmount,
+        cost: chargeAmount,
+        image_count: imageParts.length,
         messages: [
           { role: 'system', content: '系统提示词由 aivip 后端提示词配置注入。' },
           { role: 'user', content: userContent },
