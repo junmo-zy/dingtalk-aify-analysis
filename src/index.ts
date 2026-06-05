@@ -1,24 +1,19 @@
-const {
+import {
   AuthorizationType,
   FieldExecuteCode,
   FieldType,
   FormItemComponent,
   fieldDecoratorKit,
-}: typeof import('dingtalk-docs-cool-app') = require('dingtalk-docs-cool-app/dist-node/module/fields/index.js');
-import { existsSync, readFileSync } from 'fs';
+} from 'dingtalk-docs-cool-app/dist-node/module/fields/index.js';
 
 const { t } = fieldDecoratorKit;
 
-const GEMINI_MODEL = 'gemini-3-pro-preview';
-const GEMINI_API_BASE = 'https://aivip.link';
-const CHARGE_API = `${GEMINI_API_BASE}/api/interface/plugin/invoke`;
+const API_BASE = 'https://aivip.link';
+const ANALYSIS_MODEL = 'gemini-3-pro-preview';
+const CHARGE_INTERFACE_CODE = 'aify_dingtalk_any_analysis';
+const CHARGE_API = `${API_BASE}/api/interface/${CHARGE_INTERFACE_CODE}/invoke`;
 const AUTH_ID = 'aify_auth';
-
-function getAnalysisCost(imageCount: number): number {
-  if (imageCount <= 3) return 40;
-  if (imageCount <= 6) return 60;
-  return 80;
-}
+const ANALYSIS_COST = 20;
 
 type DingTalkContext = {
   fetch: (url: string, options: any, authId?: string) => Promise<any>;
@@ -47,58 +42,45 @@ type ChargeResult = {
   remaining?: number;
 };
 
-function isLocalUrl(url: string): boolean {
-  const hostname = new URL(url).hostname;
-  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+async function fetchWithAuth(context: DingTalkContext, url: string, options: any, authId?: string): Promise<any> {
+  return context.fetch(url, options, authId);
 }
 
-function getLocalAuthToken(): string | undefined {
-  try {
-    const configPath = `${process.cwd()}\\config.json`;
-    if (!existsSync(configPath)) return undefined;
-
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    return typeof config.authorizations === 'string' ? config.authorizations : undefined;
-  } catch (e: any) {
-    console.error(`[localAuth] failed to read config.json: ${e?.message}`);
-    return undefined;
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...Array.from(bytes.subarray(i, i + chunkSize)));
   }
-}
-
-async function fetchWithLocalhostSupport(context: DingTalkContext, url: string, options: any, authId?: string): Promise<any> {
-  if (!isLocalUrl(url)) {
-    return context.fetch(url, options, authId);
-  }
-
-  const headers = { ...(options?.headers || {}) };
-  const token = authId ? getLocalAuthToken() : undefined;
-  if (token) {
-    headers.authorization = `Bearer ${token}`;
-  }
-
-  const localFetchPackage = 'node-fetch';
-  const localFetch = module.require(localFetchPackage);
-  return localFetch(url, {
-    ...options,
-    headers,
-  });
+  return btoa(binary);
 }
 
 async function charge(context: DingTalkContext, amount: number, imageCount: number): Promise<ChargeResult> {
   try {
-    const res = await fetchWithLocalhostSupport(
+    const requestBody = {
+      action: 'plugin_charge',
+      interface_code: CHARGE_INTERFACE_CODE,
+      pack_id: context.extensionId,
+      base_id: context.baseId,
+      amount,
+      image_count: imageCount,
+    };
+    console.log(JSON.stringify({
+      tag: '===charge 计费请求',
+      amount: requestBody.amount,
+      imageCount: requestBody.image_count,
+      hasPackId: Boolean(requestBody.pack_id),
+      hasBaseId: Boolean(requestBody.base_id),
+    }), '\n');
+
+    const res = await fetchWithAuth(
       context,
       CHARGE_API,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'plugin_charge',
-          pack_id: context.packID,
-          base_id: context.baseID,
-          amount,
-          image_count: imageCount,
-        }),
+        body: JSON.stringify(requestBody),
       },
       AUTH_ID,
     );
@@ -148,20 +130,12 @@ fieldDecoratorKit.setDomainList([
   'dingtalk.com',
   'dingtalkapps.com',
   'alidocs.com',
+  'alidocs2-zjk-cdn.dingtalk.com',
   'aliyuncs.com',
   'alicdn.com',
-  '127.0.0.1',
+  'youke.xn--y7xa690gmna.cn',
   'aivip.link',
-] as any);
-
-const domainList = fieldDecoratorKit.getDomainList() as any[];
-domainList.push(
-  /(^|\.)dingtalk\.com$/i,
-  /(^|\.)dingtalkapps\.com$/i,
-  /(^|\.)alidocs\.com$/i,
-  /(^|\.)aliyuncs\.com$/i,
-  /(^|\.)alicdn\.com$/i,
-);
+]);
 
 function extractPrompt(promptField: unknown): string {
   if (Array.isArray(promptField)) {
@@ -199,8 +173,8 @@ fieldDecoratorKit.setDecorator({
     'zh-CN': {
       promptLabel: '提示词',
       promptTooltip: '选择包含提示词的文本字段，AIFY 将以此为指令分析图片并生成新内容',
-      imagesLabel: '图片列（1-3张40积分，4-6张60积分，7-10张80积分）',
-      imagesTooltip: '选择一个附件字段，单格内最多分析 10 张图片。扣费规则：1-3张40积分，4-6张60积分，7-10张80积分。',
+      imagesLabel: '图片列（每次20积分）',
+      imagesTooltip: '选择一个附件字段，单格内最多分析 10 张图片。每次运行扣 20 积分。',
       authorizationName: 'AIFY API 授权',
       authorizationTooltip: '请访问 https://aivip.link/dashboard/apikey 查看或生成您的 API Key。',
     },
@@ -208,8 +182,8 @@ fieldDecoratorKit.setDecorator({
       promptLabel: 'Prompt',
       promptTooltip:
         'Select the text field containing the prompt. AIFY will use it as instructions to analyze images and generate new content.',
-      imagesLabel: 'Image Field (1-3: 40 pts, 4-6: 60 pts, 7-10: 80 pts)',
-      imagesTooltip: 'Select one attachment field. Up to 10 images in the cell will be analyzed. Billing: 1-3 images 40 points, 4-6 images 60 points, 7-10 images 80 points.',
+      imagesLabel: 'Image Field (20 pts per run)',
+      imagesTooltip: 'Select one attachment field. Up to 10 images in the cell will be analyzed. Billing: 20 points per run.',
       authorizationName: 'AIFY API Authorization',
       authorizationTooltip: 'Visit https://aivip.link/dashboard/apikey to get your API Key.',
     },
@@ -217,8 +191,8 @@ fieldDecoratorKit.setDecorator({
       promptLabel: 'プロンプト',
       promptTooltip:
         'プロンプトを含むテキストフィールドを選択してください。AIFY がそれを指示として画像を分析し、新しいコンテンツを生成します。',
-      imagesLabel: '画像列（1-3枚40ポイント、4-6枚60ポイント、7-10枚80ポイント）',
-      imagesTooltip: '添付フィールドを1つ選択してください。セル内の画像を最大10枚まで分析します。課金ルール：1-3枚40ポイント、4-6枚60ポイント、7-10枚80ポイント。',
+      imagesLabel: '画像列（1回20ポイント）',
+      imagesTooltip: '添付フィールドを1つ選択してください。セル内の画像を最大10枚まで分析します。課金ルール：1回20ポイント。',
       authorizationName: 'AIFY API 認証',
       authorizationTooltip: 'https://aivip.link/dashboard/apikey で API Key を取得してください。',
     },
@@ -303,11 +277,11 @@ fieldDecoratorKit.setDecorator({
         debugLog({ [`===4.${i + 1} 开始加载图片`]: { name: imgItem.name } });
 
         try {
-          const imgResp = await fetchWithLocalhostSupport(context, imgUrl, { method: 'GET' });
+          const imgResp = await fetchWithAuth(context, imgUrl, { method: 'GET' });
           const arrayBuffer = await imgResp.arrayBuffer();
           const rawMime: string = imgResp.headers?.get?.('content-type') || imgItem.type || 'image/jpeg';
           const mimeType = rawMime.split(';')[0].trim();
-          const base64Data = Buffer.from(arrayBuffer).toString('base64');
+          const base64Data = arrayBufferToBase64(arrayBuffer);
 
           imageParts.push({
             inline_data: {
@@ -341,7 +315,7 @@ fieldDecoratorKit.setDecorator({
         },
       ];
 
-      const chargeAmount = getAnalysisCost(imageParts.length);
+      const chargeAmount = ANALYSIS_COST;
       const chargeResult = await charge(context, chargeAmount, imageParts.length);
       if (!chargeResult.ok) {
         debugLog({ '===5.5 扣费失败': { amount: chargeAmount, msg: chargeResult.msg } });
@@ -359,7 +333,7 @@ fieldDecoratorKit.setDecorator({
       });
 
       const requestBody = {
-        model: GEMINI_MODEL,
+        model: ANALYSIS_MODEL,
         amount: chargeAmount,
         cost: chargeAmount,
         image_count: imageParts.length,
@@ -371,10 +345,10 @@ fieldDecoratorKit.setDecorator({
         max_tokens: 8192,
       };
 
-      const geminiUrl = `${GEMINI_API_BASE}/api/analysis/gemini-vision`;
-      debugLog({ '===5 发起AIFY分析请求': { url: geminiUrl, model: GEMINI_MODEL, imageCount: imageParts.length } });
+      const geminiUrl = `${API_BASE}/api/analysis/gemini-vision`;
+      debugLog({ '===5 发起AIFY分析请求': { url: geminiUrl, model: ANALYSIS_MODEL, imageCount: imageParts.length } });
 
-      const geminiResp = await fetchWithLocalhostSupport(
+      const geminiResp = await fetchWithAuth(
         context,
         geminiUrl,
         {
