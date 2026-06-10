@@ -46,16 +46,6 @@ async function fetchWithAuth(context: DingTalkContext, url: string, options: any
   return context.fetch(url, options, authId);
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...Array.from(bytes.subarray(i, i + chunkSize)));
-  }
-  return btoa(binary);
-}
-
 async function charge(context: DingTalkContext, amount: number, imageCount: number): Promise<ChargeResult> {
   try {
     const requestBody = {
@@ -123,17 +113,6 @@ async function charge(context: DingTalkContext, amount: number, imageCount: numb
 }
 
 fieldDecoratorKit.setDomainList([
-  'feishu.cn',
-  'feishucdn.com',
-  'larksuitecdn.com',
-  'larksuite.com',
-  'dingtalk.com',
-  'dingtalkapps.com',
-  'alidocs.com',
-  'alidocs2-zjk-cdn.dingtalk.com',
-  'aliyuncs.com',
-  'alicdn.com',
-  'youke.xn--y7xa690gmna.cn',
   'aivip.link',
 ]);
 
@@ -165,6 +144,21 @@ function extractAttachments(value: unknown): Attachment[] {
 
   flatten(value);
   return rawImages.filter((img) => img?.tmp_url || img?.url).slice(0, 10);
+}
+
+function attachmentToImagePart(attachment: Attachment): any | null {
+  const url = String(attachment.tmp_url || attachment.url || '').trim();
+  if (!url) return null;
+
+  return {
+    type: 'image_url',
+    image_url: {
+      url,
+      name: attachment.name,
+      mime_type: attachment.type,
+      size: attachment.size,
+    },
+  };
 }
 
 fieldDecoratorKit.setDecorator({
@@ -270,45 +264,26 @@ fieldDecoratorKit.setDecorator({
 
       debugLog({ '===3 待分析图片数量': imageItems.length });
 
-      const imageParts: any[] = [];
-      for (let i = 0; i < imageItems.length; i++) {
-        const imgItem = imageItems[i];
-        const imgUrl = String(imgItem.tmp_url || imgItem.url || '');
-        debugLog({ [`===4.${i + 1} 开始加载图片`]: { name: imgItem.name } });
-
-        try {
-          const imgResp = await fetchWithAuth(context, imgUrl, { method: 'GET' });
-          const arrayBuffer = await imgResp.arrayBuffer();
-          const rawMime: string = imgResp.headers?.get?.('content-type') || imgItem.type || 'image/jpeg';
-          const mimeType = rawMime.split(';')[0].trim();
-          const base64Data = arrayBufferToBase64(arrayBuffer);
-
-          imageParts.push({
-            inline_data: {
-              mime_type: mimeType,
-              data: base64Data,
-            },
-          });
-          debugLog({ [`===4.${i + 1} 图片加载成功`]: { mimeType, byteSize: arrayBuffer.byteLength } });
-        } catch (imgErr: any) {
+      const imageParts = imageItems
+        .map((imgItem, index) => {
+          const part = attachmentToImagePart(imgItem);
           debugLog({
-            [`===4.${i + 1} 图片加载失败（已跳过）`]: {
-              error: imgErr?.message,
+            [`===4.${index + 1} 图片URL已读取`]: {
+              name: imgItem.name,
+              hasUrl: Boolean(part),
             },
           });
-        }
-      }
+          return part;
+        })
+        .filter((part): part is any => Boolean(part));
 
       if (imageParts.length === 0) {
-        debugLog({ '===5 错误': '所有图片加载均失败' });
+        debugLog({ '===5 错误': '所有图片URL均为空' });
         return { code: FieldExecuteCode.Error };
       }
 
       const userContent: any[] = [
-        ...imageParts.map((p: any) => ({
-          type: 'image_url',
-          image_url: { url: `data:${p.inline_data.mime_type};base64,${p.inline_data.data}` },
-        })),
+        ...imageParts,
         {
           type: 'text',
           text: `补充产品信息（优先级最高）：${userPrompt}\n\n请严格按照系统提示词的分析框架分析图片，直接输出合法的 JSON 对象，以 { 开始，以 } 结束，不要任何前言或说明文字。`,
@@ -333,6 +308,8 @@ fieldDecoratorKit.setDecorator({
       });
 
       const requestBody = {
+        source: 'dingtalk_any_analysis',
+        transfer_image_urls_to_cos: true,
         model: ANALYSIS_MODEL,
         amount: chargeAmount,
         cost: chargeAmount,
